@@ -1,0 +1,110 @@
+extends Weapon
+
+enum _Stage {
+	NONE,
+	LIGHT,
+	HEAVY,
+	RECOVER,
+}
+
+var _attack_stage_started_at: int = -1
+var _attack_stage: int = _Stage.NONE
+
+@export var input: UnitInput
+@export var actor: Actor
+@export var synchronizer: RollbackSynchronizer
+@export var projectile_root: Node
+@export var vfx_root: Node
+@export var light_projectile: PackedScene
+@export var heavy_projectile: PackedScene
+@export var heavy_charge_vfx: PackedScene
+
+
+func _get_rollback_states() -> PackedStringArray:
+	return ["_attack_stage_started_at", "_attack_stage"]
+
+
+func _rollback_tick(_delta: float, tick: int, _is_fresh: bool) -> void:
+	if synchronizer.is_predicting():
+		return
+
+	var is_heavy := input.is_action_long_pressed("action_primary")
+	var is_light := not is_heavy and input.is_action_just_pressed("action_primary")
+
+	if is_light and _attack_stage == _Stage.NONE:
+		_attack_stage_started_at = tick
+		_attack_stage = _Stage.LIGHT
+		_record_light_attack_effect()
+		_attack_stage_started_at = tick
+		_attack_stage = _Stage.RECOVER
+		return
+
+	if is_heavy and _attack_stage == _Stage.NONE:
+		_attack_stage_started_at = tick
+		_attack_stage = _Stage.HEAVY
+		_record_heavy_hold_effect()
+		return
+
+	if _attack_stage == _Stage.HEAVY and not is_heavy:
+		_attack_stage_started_at = tick
+		_attack_stage = _Stage.RECOVER
+		_record_heavy_release_effect()
+		return
+
+	if _attack_stage == _Stage.RECOVER:
+		_attack_stage_started_at = -1
+		_attack_stage = _Stage.NONE
+
+
+func _record_light_attack_effect() -> void:
+	RollbackEffects.record(
+		[self, _attack_stage, _attack_stage_started_at],
+		func(ctx: RollbackEffects.Context) -> void:
+			actor.play_animation(&"attack")
+			var projectile: Node = _spawn_projectile(light_projectile)
+			ctx.on_revert = func() -> void:
+				actor.play_animation(&"idle")
+				if is_instance_valid(projectile):
+					projectile.queue_free()
+	)
+
+
+func _record_heavy_hold_effect() -> void:
+	RollbackEffects.record(
+		[self, _attack_stage, _attack_stage_started_at],
+		func(ctx: RollbackEffects.Context) -> void:
+			actor.play_animation(&"attack_hold")
+			var charge_vfx: Node = _spawn_charge_vfx()
+			ctx.on_revert = func() -> void:
+				actor.play_animation(&"idle")
+				if is_instance_valid(charge_vfx):
+					charge_vfx.queue_free()
+	)
+
+
+func _record_heavy_release_effect() -> void:
+	RollbackEffects.record(
+		[self, _attack_stage, _attack_stage_started_at],
+		func(ctx: RollbackEffects.Context) -> void:
+			actor.play_animation(&"attack_release")
+			var projectile: Node = _spawn_projectile(heavy_projectile)
+			ctx.on_revert = func() -> void:
+				actor.play_animation(&"idle")
+				if is_instance_valid(projectile):
+					projectile.queue_free()
+	)
+
+
+func _spawn_projectile(projectile_scene: PackedScene) -> Node:
+	var projectile: Node = projectile_scene.instantiate()
+	projectile_root.add_child(projectile)
+	projectile.global_transform = actor.muzzle.global_transform
+	return projectile
+
+
+func _spawn_charge_vfx() -> Node:
+	var vfx: Node = heavy_charge_vfx.instantiate()
+	vfx_root.add_child(vfx)
+	vfx.global_transform = actor.muzzle.global_transform
+	return vfx
+
