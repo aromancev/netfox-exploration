@@ -194,11 +194,7 @@ func _spawn_charge_vfx() -> Node:
 
 
 func _get_projectile_direction() -> Vector3:
-	var direction: Vector3 = input.get_aim().normalized()
-	if direction.is_zero_approx():
-		return -actor.muzzle.global_basis.z.normalized()
-
-	return direction
+	return input.get_aim().normalized()
 
 
 func _get_projectile_transform(direction: Vector3) -> Transform3D:

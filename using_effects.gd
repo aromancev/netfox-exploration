@@ -139,14 +139,12 @@ func _spawn_charge_vfx() -> Node:
 
 
 func _get_projectile_direction() -> Vector3:
-	var direction: Vector3 = input.get_aim().normalized()
-	if direction.is_zero_approx():
-		return -actor.muzzle.global_basis.z.normalized()
-
-	return direction
+	return input.get_aim().normalized()
 
 
 func _get_direction_key(direction: Vector3) -> Vector3:
+	# Quantize direction so tiny float differences during resim do not create a
+	# different rollback-effect key and churn projectile effects.
 	return direction.snapped(Vector3(0.01, 0.01, 0.01))
 
 
