@@ -127,7 +127,7 @@ func _start_light_attack(tick: int) -> void:
 	_attack_stage = _Stage.LIGHT
 	var context: Dictionary = {
 		"kind": _EVENT_LIGHT,
-		"projectile": _spawn_projectile(light_projectile),
+		"projectile": _spawn_projectile(light_projectile, _get_projectile_direction()),
 	}
 	_action.set_context(context)
 
@@ -157,7 +157,7 @@ func _release_heavy_attack(tick: int) -> void:
 
 	context.erase("vfx")
 	context["kind"] = _EVENT_HEAVY_RELEASE
-	context["projectile"] = _spawn_projectile(heavy_projectile)
+	context["projectile"] = _spawn_projectile(heavy_projectile, _get_projectile_direction())
 	_action.set_context(context)
 
 
@@ -179,10 +179,10 @@ func _cancel_heavy_attack(tick: int) -> void:
 	_start_recover(tick)
 
 
-func _spawn_projectile(projectile_scene: PackedScene) -> Node:
+func _spawn_projectile(projectile_scene: PackedScene, direction: Vector3) -> Node:
 	var projectile: Node = projectile_scene.instantiate()
 	projectile_root.add_child(projectile)
-	projectile.global_transform = actor.muzzle.global_transform
+	projectile.global_transform = _get_projectile_transform(direction)
 	return projectile
 
 
@@ -191,6 +191,25 @@ func _spawn_charge_vfx() -> Node:
 	vfx_root.add_child(vfx)
 	vfx.global_transform = actor.muzzle.global_transform
 	return vfx
+
+
+func _get_projectile_direction() -> Vector3:
+	var direction: Vector3 = -actor.global_basis.z.normalized()
+	if direction.is_zero_approx():
+		return -actor.muzzle.global_basis.z.normalized()
+
+	return direction
+
+
+func _get_projectile_transform(direction: Vector3) -> Transform3D:
+	var projectile_transform: Transform3D = actor.muzzle.global_transform
+	var safe_direction: Vector3 = direction
+	if safe_direction.is_zero_approx():
+		safe_direction = -projectile_transform.basis.z.normalized()
+
+	return projectile_transform.looking_at(
+		projectile_transform.origin + safe_direction, actor.global_basis.y
+	)
 
 
 func _cancel_attack() -> void:

@@ -52,7 +52,9 @@ func _rollback_tick(_delta: float, tick: int, _is_fresh: bool) -> void:
 		RewindableAction.CONFIRMING:
 			_attack_stage_started_at = tick
 			_attack_stage = _Stage.LIGHT
-			_action_light.set_context(_spawn_projectile(light_projectile))
+			_action_light.set_context(
+				_spawn_projectile(light_projectile, _get_projectile_direction())
+			)
 		RewindableAction.ACTIVE:
 			pass
 		RewindableAction.CANCELLING:
@@ -87,7 +89,9 @@ func _rollback_tick(_delta: float, tick: int, _is_fresh: bool) -> void:
 			_attack_stage = _Stage.RECOVER
 			_attack_stage_started_at = tick
 			_cancel_heavy_charge(_action_heavy_hold)
-			_action_heavy_release.set_context(_spawn_projectile(heavy_projectile))
+			_action_heavy_release.set_context(
+				_spawn_projectile(heavy_projectile, _get_projectile_direction())
+			)
 		RewindableAction.ACTIVE:
 			pass
 		RewindableAction.CANCELLING:
@@ -121,10 +125,10 @@ func _after_loop() -> void:
 		actor.play_animation(&"attack_hold")
 
 
-func _spawn_projectile(projectile_scene: PackedScene) -> Node:
+func _spawn_projectile(projectile_scene: PackedScene, direction: Vector3) -> Node:
 	var projectile: Node = projectile_scene.instantiate()
 	projectile_root.add_child(projectile)
-	projectile.global_transform = actor.muzzle.global_transform
+	projectile.global_transform = _get_projectile_transform(direction)
 	return projectile
 
 
@@ -133,6 +137,25 @@ func _spawn_charge_vfx() -> Node:
 	vfx_root.add_child(vfx)
 	vfx.global_transform = actor.muzzle.global_transform
 	return vfx
+
+
+func _get_projectile_direction() -> Vector3:
+	var direction: Vector3 = -actor.global_basis.z.normalized()
+	if direction.is_zero_approx():
+		return -actor.muzzle.global_basis.z.normalized()
+
+	return direction
+
+
+func _get_projectile_transform(direction: Vector3) -> Transform3D:
+	var projectile_transform: Transform3D = actor.muzzle.global_transform
+	var safe_direction: Vector3 = direction
+	if safe_direction.is_zero_approx():
+		safe_direction = -projectile_transform.basis.z.normalized()
+
+	return projectile_transform.looking_at(
+		projectile_transform.origin + safe_direction, actor.global_basis.y
+	)
 
 
 func _cancel_projectile(action: RewindableAction) -> void:

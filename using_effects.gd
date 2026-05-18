@@ -77,11 +77,12 @@ func _rollback_tick(_delta: float, tick: int, _is_fresh: bool) -> void:
 
 
 func _record_light_attack_effect() -> void:
+	var direction: Vector3 = _get_projectile_direction()
 	RollbackEffects.record(
-		[self, _attack_stage, _attack_stage_started_at],
+		[self, &"light_projectile", _get_direction_key(direction)],
 		func(ctx: RollbackEffects.Context) -> void:
 			actor.play_animation(&"attack")
-			var projectile: Node = _spawn_projectile(light_projectile)
+			var projectile: Node = _spawn_projectile(light_projectile, direction)
 			ctx.on_revert = func() -> void:
 				actor.play_animation(&"idle")
 				if is_instance_valid(projectile):
@@ -91,7 +92,7 @@ func _record_light_attack_effect() -> void:
 
 func _record_heavy_hold_effect() -> void:
 	RollbackEffects.record(
-		[self, _attack_stage, _attack_stage_started_at],
+		[self, &"heavy_hold"],
 		func(ctx: RollbackEffects.Context) -> void:
 			actor.play_animation(&"attack_hold")
 			var charge_vfx: Node = _spawn_charge_vfx()
@@ -103,11 +104,12 @@ func _record_heavy_hold_effect() -> void:
 
 
 func _record_heavy_release_effect() -> void:
+	var direction: Vector3 = _get_projectile_direction()
 	RollbackEffects.record(
-		[self, _attack_stage, _attack_stage_started_at],
+		[self, &"heavy_projectile", _get_direction_key(direction)],
 		func(ctx: RollbackEffects.Context) -> void:
 			actor.play_animation(&"attack_release")
-			var projectile: Node = _spawn_projectile(heavy_projectile)
+			var projectile: Node = _spawn_projectile(heavy_projectile, direction)
 			ctx.on_revert = func() -> void:
 				actor.play_animation(&"idle")
 				if is_instance_valid(projectile):
@@ -117,15 +119,15 @@ func _record_heavy_release_effect() -> void:
 
 func _record_recover_effect() -> void:
 	RollbackEffects.record(
-		[self, _attack_stage, _attack_stage_started_at],
+		[self, &"recover"],
 		func(_ctx: RollbackEffects.Context) -> void: actor.play_animation(&"idle")
 	)
 
 
-func _spawn_projectile(projectile_scene: PackedScene) -> Node:
+func _spawn_projectile(projectile_scene: PackedScene, direction: Vector3) -> Node:
 	var projectile: Node = projectile_scene.instantiate()
 	projectile_root.add_child(projectile)
-	projectile.global_transform = actor.muzzle.global_transform
+	projectile.global_transform = _get_projectile_transform(direction)
 	return projectile
 
 
@@ -134,3 +136,26 @@ func _spawn_charge_vfx() -> Node:
 	vfx_root.add_child(vfx)
 	vfx.global_transform = actor.muzzle.global_transform
 	return vfx
+
+
+func _get_projectile_direction() -> Vector3:
+	var direction: Vector3 = -actor.global_basis.z.normalized()
+	if direction.is_zero_approx():
+		return -actor.muzzle.global_basis.z.normalized()
+
+	return direction
+
+
+func _get_direction_key(direction: Vector3) -> Vector3:
+	return direction.snapped(Vector3(0.01, 0.01, 0.01))
+
+
+func _get_projectile_transform(direction: Vector3) -> Transform3D:
+	var projectile_transform: Transform3D = actor.muzzle.global_transform
+	var safe_direction: Vector3 = direction
+	if safe_direction.is_zero_approx():
+		safe_direction = -projectile_transform.basis.z.normalized()
+
+	return projectile_transform.looking_at(
+		projectile_transform.origin + safe_direction, actor.global_basis.y
+	)
