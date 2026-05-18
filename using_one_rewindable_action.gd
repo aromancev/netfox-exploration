@@ -7,9 +7,14 @@ enum _Stage {
 	RECOVER,
 }
 
+const _LIGHT_DURATION: float = 0.3
+const _HEAVY_CHARGE_DURATION: float = 0.8
+const _RECOVER_DURATION: float = 0.8
+
 const _EVENT_LIGHT := &"light"
 const _EVENT_HEAVY_HOLD := &"heavy_hold"
 const _EVENT_HEAVY_RELEASE := &"heavy_release"
+const _EVENT_RECOVER := &"recover"
 
 var _attack_stage_started_at: int = -1
 var _attack_stage: int = _Stage.NONE
@@ -43,13 +48,25 @@ func _rollback_tick(_delta: float, tick: int, _is_fresh: bool) -> void:
 	if synchronizer.is_predicting():
 		return
 
-	var is_heavy := input.is_action_long_pressed("action_primary")
-	var is_light := not is_heavy and input.is_action_just_pressed("action_primary")
-	var starts_light := is_light and _attack_stage == _Stage.NONE
-	var starts_heavy := is_heavy and _attack_stage == _Stage.NONE
-	var releases_heavy := _attack_stage == _Stage.HEAVY and not is_heavy and not _heavy_projectile_spawned
+	var is_heavy: bool = input.is_action_long_pressed("action_primary")
+	var is_light: bool = not is_heavy and input.is_action_just_pressed("action_primary")
+	var starts_light: bool = is_light and _attack_stage == _Stage.NONE
+	var starts_heavy: bool = is_heavy and _attack_stage == _Stage.NONE
+	var heavy_charge_elapsed: float = NetworkTime.seconds_between(_attack_stage_started_at, tick)
+	var releases_heavy: bool = (
+		_attack_stage == _Stage.HEAVY
+		and not is_heavy
+		and not _heavy_projectile_spawned
+		and heavy_charge_elapsed >= _HEAVY_CHARGE_DURATION
+	)
+	var cancels_heavy: bool = (
+		_attack_stage == _Stage.HEAVY
+		and not is_heavy
+		and not _heavy_projectile_spawned
+		and heavy_charge_elapsed < _HEAVY_CHARGE_DURATION
+	)
 
-	var should_be_active := starts_light or starts_heavy or _attack_stage != _Stage.NONE
+	var should_be_active: bool = starts_light or starts_heavy or _attack_stage != _Stage.NONE
 	_action.set_active(should_be_active)
 
 	match _action.get_status():
@@ -61,13 +78,25 @@ func _rollback_tick(_delta: float, tick: int, _is_fresh: bool) -> void:
 		RewindableAction.CANCELLING:
 			_cancel_attack()
 
+	if (
+		_attack_stage == _Stage.LIGHT
+		and NetworkTime.seconds_between(_attack_stage_started_at, tick) >= _LIGHT_DURATION
+	):
+		_start_recover(tick)
+		return
+
 	if releases_heavy:
 		_release_heavy_attack(tick)
+		return
 
-	if _attack_stage == _Stage.LIGHT:
-		_attack_stage_started_at = tick
-		_attack_stage = _Stage.RECOVER
-	elif _attack_stage == _Stage.RECOVER:
+	if cancels_heavy:
+		_cancel_heavy_attack(tick)
+		return
+
+	if (
+		_attack_stage == _Stage.RECOVER
+		and NetworkTime.seconds_between(_attack_stage_started_at, tick) >= _RECOVER_DURATION
+	):
 		_attack_stage_started_at = -1
 		_attack_stage = _Stage.NONE
 		_heavy_projectile_spawned = false
@@ -86,6 +115,8 @@ func _after_loop() -> void:
 		actor.play_animation(&"attack_release")
 	elif _last_confirmed_event == _EVENT_HEAVY_HOLD:
 		actor.play_animation(&"attack_hold")
+	elif _last_confirmed_event == _EVENT_RECOVER:
+		actor.play_animation(&"idle")
 
 	_last_confirmed_event = &""
 
@@ -94,10 +125,11 @@ func _start_light_attack(tick: int) -> void:
 	_last_confirmed_event = _EVENT_LIGHT
 	_attack_stage_started_at = tick
 	_attack_stage = _Stage.LIGHT
-	_action.set_context({
+	var context: Dictionary = {
 		"kind": _EVENT_LIGHT,
 		"projectile": _spawn_projectile(light_projectile),
-	})
+	}
+	_action.set_context(context)
 
 
 func _start_heavy_attack(tick: int) -> void:
@@ -105,10 +137,11 @@ func _start_heavy_attack(tick: int) -> void:
 	_attack_stage_started_at = tick
 	_attack_stage = _Stage.HEAVY
 	_heavy_projectile_spawned = false
-	_action.set_context({
+	var context: Dictionary = {
 		"kind": _EVENT_HEAVY_HOLD,
 		"vfx": _spawn_charge_vfx(),
-	})
+	}
+	_action.set_context(context)
 
 
 func _release_heavy_attack(tick: int) -> void:
@@ -126,6 +159,24 @@ func _release_heavy_attack(tick: int) -> void:
 	context["kind"] = _EVENT_HEAVY_RELEASE
 	context["projectile"] = _spawn_projectile(heavy_projectile)
 	_action.set_context(context)
+
+
+func _start_recover(tick: int) -> void:
+	_last_confirmed_event = _EVENT_RECOVER
+	_attack_stage_started_at = tick
+	_attack_stage = _Stage.RECOVER
+
+
+func _cancel_heavy_attack(tick: int) -> void:
+	var context: Dictionary = _get_action_context()
+	var charge_vfx: Variant = context.get("vfx")
+	if charge_vfx is Node:
+		(charge_vfx as Node).queue_free()
+
+	context.erase("vfx")
+	context["kind"] = _EVENT_RECOVER
+	_action.set_context(context)
+	_start_recover(tick)
 
 
 func _spawn_projectile(projectile_scene: PackedScene) -> Node:

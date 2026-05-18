@@ -7,6 +7,10 @@ enum _Stage {
 	RECOVER,
 }
 
+const _LIGHT_DURATION: float = 0.3
+const _HEAVY_CHARGE_DURATION: float = 0.8
+const _RECOVER_DURATION: float = 0.8
+
 var _attack_stage_started_at: int = -1
 var _attack_stage: int = _Stage.NONE
 
@@ -39,8 +43,9 @@ func _rollback_tick(_delta: float, tick: int, _is_fresh: bool) -> void:
 	if synchronizer.is_predicting():
 		return
 
-	var is_heavy := input.is_action_long_pressed("action_primary")
-	var is_light := not is_heavy and input.is_action_just_pressed("action_primary")
+	var is_heavy: bool = input.is_action_long_pressed("action_primary")
+	var is_light: bool = not is_heavy and input.is_action_just_pressed("action_primary")
+	var heavy_charge_elapsed: float = NetworkTime.seconds_between(_attack_stage_started_at, tick)
 
 	_action_light.set_active(is_light and _attack_stage == _Stage.NONE)
 	match _action_light.get_status():
@@ -49,8 +54,7 @@ func _rollback_tick(_delta: float, tick: int, _is_fresh: bool) -> void:
 			_attack_stage = _Stage.LIGHT
 			_action_light.set_context(_spawn_projectile(light_projectile))
 		RewindableAction.ACTIVE:
-			_attack_stage_started_at = tick
-			_attack_stage = _Stage.LIGHT
+			pass
 		RewindableAction.CANCELLING:
 			_cancel_projectile(_action_light)
 
@@ -61,16 +65,22 @@ func _rollback_tick(_delta: float, tick: int, _is_fresh: bool) -> void:
 			_attack_stage = _Stage.HEAVY
 			_action_heavy_hold.set_context(_spawn_charge_vfx())
 		RewindableAction.ACTIVE:
-			_attack_stage_started_at = tick
-			_attack_stage = _Stage.HEAVY
+			pass
 		RewindableAction.CANCELLING:
 			_cancel_heavy_charge(_action_heavy_hold)
 
-	if _attack_stage == _Stage.LIGHT and _action_light.has_confirmed():
+	if (
+		_attack_stage == _Stage.LIGHT
+		and NetworkTime.seconds_between(_attack_stage_started_at, tick) >= _LIGHT_DURATION
+	):
 		_attack_stage_started_at = tick
 		_attack_stage = _Stage.RECOVER
 
-	var is_heavy_release := _attack_stage == _Stage.HEAVY and not is_heavy
+	var is_heavy_release: bool = (
+		_attack_stage == _Stage.HEAVY
+		and not is_heavy
+		and heavy_charge_elapsed >= _HEAVY_CHARGE_DURATION
+	)
 	_action_heavy_release.set_active(is_heavy_release)
 	match _action_heavy_release.get_status():
 		RewindableAction.CONFIRMING:
@@ -79,12 +89,23 @@ func _rollback_tick(_delta: float, tick: int, _is_fresh: bool) -> void:
 			_cancel_heavy_charge(_action_heavy_hold)
 			_action_heavy_release.set_context(_spawn_projectile(heavy_projectile))
 		RewindableAction.ACTIVE:
-			_attack_stage = _Stage.RECOVER
-			_attack_stage_started_at = tick
+			pass
 		RewindableAction.CANCELLING:
 			_cancel_projectile(_action_heavy_release)
 
-	if _attack_stage == _Stage.RECOVER:
+	if (
+		_attack_stage == _Stage.HEAVY
+		and not is_heavy
+		and heavy_charge_elapsed < _HEAVY_CHARGE_DURATION
+	):
+		_cancel_heavy_charge(_action_heavy_hold)
+		_attack_stage_started_at = tick
+		_attack_stage = _Stage.RECOVER
+
+	if (
+		_attack_stage == _Stage.RECOVER
+		and NetworkTime.seconds_between(_attack_stage_started_at, tick) >= _RECOVER_DURATION
+	):
 		_attack_stage_started_at = -1
 		_attack_stage = _Stage.NONE
 
