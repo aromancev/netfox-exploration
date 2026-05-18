@@ -7,6 +7,10 @@ enum _Stage {
 	RECOVER,
 }
 
+const _LIGHT_DURATION: float = 0.3
+const _HEAVY_CHARGE_DURATION: float = 0.8
+const _RECOVER_DURATION: float = 0.8
+
 var _attack_stage_started_at: int = -1
 var _attack_stage: int = _Stage.NONE
 
@@ -28,15 +32,22 @@ func _rollback_tick(_delta: float, tick: int, _is_fresh: bool) -> void:
 	if synchronizer.is_predicting():
 		return
 
-	var is_heavy := input.is_action_long_pressed("action_primary")
-	var is_light := not is_heavy and input.is_action_just_pressed("action_primary")
+	var is_heavy: bool = input.is_action_long_pressed("action_primary")
+	var is_light: bool = not is_heavy and input.is_action_just_pressed("action_primary")
 
 	if is_light and _attack_stage == _Stage.NONE:
 		_attack_stage_started_at = tick
 		_attack_stage = _Stage.LIGHT
 		_record_light_attack_effect()
+		return
+
+	if (
+		_attack_stage == _Stage.LIGHT
+		and NetworkTime.seconds_between(_attack_stage_started_at, tick) >= _LIGHT_DURATION
+	):
 		_attack_stage_started_at = tick
 		_attack_stage = _Stage.RECOVER
+		_record_recover_effect()
 		return
 
 	if is_heavy and _attack_stage == _Stage.NONE:
@@ -46,12 +57,21 @@ func _rollback_tick(_delta: float, tick: int, _is_fresh: bool) -> void:
 		return
 
 	if _attack_stage == _Stage.HEAVY and not is_heavy:
+		var heavy_charge_elapsed: float = NetworkTime.seconds_between(
+			_attack_stage_started_at, tick
+		)
 		_attack_stage_started_at = tick
 		_attack_stage = _Stage.RECOVER
-		_record_heavy_release_effect()
+		if heavy_charge_elapsed >= _HEAVY_CHARGE_DURATION:
+			_record_heavy_release_effect()
+		else:
+			_record_recover_effect()
 		return
 
-	if _attack_stage == _Stage.RECOVER:
+	if (
+		_attack_stage == _Stage.RECOVER
+		and NetworkTime.seconds_between(_attack_stage_started_at, tick) >= _RECOVER_DURATION
+	):
 		_attack_stage_started_at = -1
 		_attack_stage = _Stage.NONE
 
@@ -95,6 +115,13 @@ func _record_heavy_release_effect() -> void:
 	)
 
 
+func _record_recover_effect() -> void:
+	RollbackEffects.record(
+		[self, _attack_stage, _attack_stage_started_at],
+		func(_ctx: RollbackEffects.Context) -> void: actor.play_animation(&"idle")
+	)
+
+
 func _spawn_projectile(projectile_scene: PackedScene) -> Node:
 	var projectile: Node = projectile_scene.instantiate()
 	projectile_root.add_child(projectile)
@@ -107,4 +134,3 @@ func _spawn_charge_vfx() -> Node:
 	vfx_root.add_child(vfx)
 	vfx.global_transform = actor.muzzle.global_transform
 	return vfx
-
