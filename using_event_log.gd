@@ -11,10 +11,10 @@ const _LIGHT_DURATION: float = 0.3
 const _HEAVY_CHARGE_DURATION: float = 0.8
 const _RECOVER_DURATION: float = 0.8
 
-const _STREAM_LIGHT_PROJECTILE: String = "light_projectile"
-const _STREAM_HEAVY_HOLD: String = "heavy_hold"
-const _STREAM_HEAVY_PROJECTILE: String = "heavy_projectile"
-const _STREAM_RECOVER: String = "recover"
+const _EVENT_LIGHT_PROJECTILE: StringName = &"light_projectile"
+const _EVENT_HEAVY_HOLD: StringName = &"heavy_hold"
+const _EVENT_HEAVY_PROJECTILE: StringName = &"heavy_projectile"
+const _EVENT_RECOVER: StringName = &"recover"
 
 var _attack_stage_started_at: int = -1
 var _attack_stage: int = _Stage.NONE
@@ -25,34 +25,18 @@ var _active_charge_vfx: Dictionary = {}
 @export var input: UnitInput
 @export var actor: Actor
 @export var synchronizer: RollbackSynchronizer
-@export var event_log: RollbackEventLog
 @export var projectile_root: Node
 @export var vfx_root: Node
 @export var light_projectile: PackedScene
 @export var heavy_projectile: PackedScene
 @export var heavy_charge_vfx: PackedScene
 
-@onready var _light_projectile_stream: RollbackEventStream = event_log.get_stream(
-	_STREAM_LIGHT_PROJECTILE.to_utf8_buffer()
-)
-@onready var _heavy_hold_stream: RollbackEventStream = event_log.get_stream(
-	_STREAM_HEAVY_HOLD.to_utf8_buffer()
-)
-@onready var _heavy_projectile_stream: RollbackEventStream = event_log.get_stream(
-	_STREAM_HEAVY_PROJECTILE.to_utf8_buffer()
-)
-@onready
-var _recover_stream: RollbackEventStream = event_log.get_stream(_STREAM_RECOVER.to_utf8_buffer())
+@onready var _event_stream: RollbackEventStream = RollbackEventLog.get_stream(_get_stream_id())
 
 
 func _ready() -> void:
-	_light_projectile_stream.event_applied.connect(_on_light_projectile_applied)
-	_light_projectile_stream.event_reverted.connect(_on_light_projectile_reverted)
-	_heavy_hold_stream.event_applied.connect(_on_heavy_hold_applied)
-	_heavy_hold_stream.event_reverted.connect(_on_heavy_hold_reverted)
-	_heavy_projectile_stream.event_applied.connect(_on_heavy_projectile_applied)
-	_heavy_projectile_stream.event_reverted.connect(_on_heavy_projectile_reverted)
-	_recover_stream.event_applied.connect(_on_recover_applied)
+	_event_stream.event_applied.connect(_on_event_applied)
+	_event_stream.event_reverted.connect(_on_event_reverted)
 
 
 func _get_rollback_states() -> PackedStringArray:
@@ -69,7 +53,7 @@ func _rollback_tick(_delta: float, tick: int, _is_fresh: bool) -> void:
 	if is_light and _attack_stage == _Stage.NONE:
 		_attack_stage_started_at = tick
 		_attack_stage = _Stage.LIGHT
-		_append_projectile_event(_light_projectile_stream)
+		_append_projectile_event(_EVENT_LIGHT_PROJECTILE)
 		return
 
 	if (
@@ -78,13 +62,13 @@ func _rollback_tick(_delta: float, tick: int, _is_fresh: bool) -> void:
 	):
 		_attack_stage_started_at = tick
 		_attack_stage = _Stage.RECOVER
-		_append_empty_event(_recover_stream)
+		_append_event(_EVENT_RECOVER)
 		return
 
 	if is_heavy and _attack_stage == _Stage.NONE:
 		_attack_stage_started_at = tick
 		_attack_stage = _Stage.HEAVY
-		_append_empty_event(_heavy_hold_stream)
+		_append_event(_EVENT_HEAVY_HOLD)
 		return
 
 	if _attack_stage == _Stage.HEAVY and not is_heavy:
@@ -94,9 +78,9 @@ func _rollback_tick(_delta: float, tick: int, _is_fresh: bool) -> void:
 		_attack_stage_started_at = tick
 		_attack_stage = _Stage.RECOVER
 		if heavy_charge_elapsed >= _HEAVY_CHARGE_DURATION:
-			_append_projectile_event(_heavy_projectile_stream)
+			_append_projectile_event(_EVENT_HEAVY_PROJECTILE)
 		else:
-			_append_empty_event(_recover_stream)
+			_append_event(_EVENT_RECOVER)
 		return
 
 	if (
@@ -107,57 +91,53 @@ func _rollback_tick(_delta: float, tick: int, _is_fresh: bool) -> void:
 		_attack_stage = _Stage.NONE
 
 
-func _append_projectile_event(stream: RollbackEventStream) -> void:
+func _append_projectile_event(kind: StringName) -> void:
 	var event: RollbackEvent = RollbackEvent.new()
-	var direction: Vector3 = _get_projectile_direction()
-	event.payload = var_to_bytes(direction)
-	stream.append_event(event)
+	event.payload = var_to_bytes(
+		{
+			"kind": kind,
+			"direction": _get_projectile_direction(),
+		}
+	)
+	_event_stream.append_event(event)
 
 
-func _append_empty_event(stream: RollbackEventStream) -> void:
+func _append_event(kind: StringName) -> void:
 	var event: RollbackEvent = RollbackEvent.new()
-	stream.append_event(event)
+	event.payload = var_to_bytes({"kind": kind})
+	_event_stream.append_event(event)
 
 
-func _on_light_projectile_applied(event: RollbackEvent) -> void:
-	actor.play_animation(&"attack")
-	var direction: Vector3 = _decode_direction(event.payload)
-	var projectile: Node = _spawn_projectile(light_projectile, direction)
-	_active_projectiles[_payload_key(event.payload)] = projectile
+func _on_event_applied(event: RollbackEvent) -> void:
+	var payload: Dictionary = _decode_payload(event.payload)
+	var kind: Variant = payload.get("kind")
+	if kind == _EVENT_LIGHT_PROJECTILE:
+		actor.play_animation(&"attack")
+		var light_direction: Vector3 = _get_payload_direction(payload)
+		var light_projectile_node: Node = _spawn_projectile(light_projectile, light_direction)
+		_active_projectiles[_payload_key(event.payload)] = light_projectile_node
+	elif kind == _EVENT_HEAVY_HOLD:
+		actor.play_animation(&"attack_hold")
+		_active_charge_vfx[_payload_key(event.payload)] = _spawn_charge_vfx()
+	elif kind == _EVENT_HEAVY_PROJECTILE:
+		_free_charge_vfx_for_kind(_EVENT_HEAVY_HOLD)
+		actor.play_animation(&"attack_release")
+		var heavy_direction: Vector3 = _get_payload_direction(payload)
+		var heavy_projectile_node: Node = _spawn_projectile(heavy_projectile, heavy_direction)
+		_active_projectiles[_payload_key(event.payload)] = heavy_projectile_node
+	elif kind == _EVENT_RECOVER:
+		_free_charge_vfx_for_kind(_EVENT_HEAVY_HOLD)
+		actor.play_animation(&"idle")
 
 
-func _on_light_projectile_reverted(event: RollbackEvent) -> void:
+func _on_event_reverted(event: RollbackEvent) -> void:
 	actor.play_animation(&"idle")
-	_free_projectile(event.payload)
-
-
-func _on_heavy_hold_applied(event: RollbackEvent) -> void:
-	actor.play_animation(&"attack_hold")
-	var payload_key: String = _payload_key(event.payload)
-	_active_charge_vfx[payload_key] = _spawn_charge_vfx()
-
-
-func _on_heavy_hold_reverted(event: RollbackEvent) -> void:
-	actor.play_animation(&"idle")
-	_free_charge_vfx(event.payload)
-
-
-func _on_heavy_projectile_applied(event: RollbackEvent) -> void:
-	_free_charge_vfx(PackedByteArray())
-	actor.play_animation(&"attack_release")
-	var direction: Vector3 = _decode_direction(event.payload)
-	var projectile: Node = _spawn_projectile(heavy_projectile, direction)
-	_active_projectiles[_payload_key(event.payload)] = projectile
-
-
-func _on_heavy_projectile_reverted(event: RollbackEvent) -> void:
-	actor.play_animation(&"idle")
-	_free_projectile(event.payload)
-
-
-func _on_recover_applied(_event: RollbackEvent) -> void:
-	_free_charge_vfx(PackedByteArray())
-	actor.play_animation(&"idle")
+	var payload: Dictionary = _decode_payload(event.payload)
+	var kind: Variant = payload.get("kind")
+	if kind == _EVENT_LIGHT_PROJECTILE or kind == _EVENT_HEAVY_PROJECTILE:
+		_free_projectile(event.payload)
+	elif kind == _EVENT_HEAVY_HOLD:
+		_free_charge_vfx(event.payload)
 
 
 func _spawn_projectile(projectile_scene: PackedScene, direction: Vector3) -> Node:
@@ -185,12 +165,24 @@ func _get_projectile_transform(direction: Vector3) -> Transform3D:
 	)
 
 
-func _decode_direction(payload: PackedByteArray) -> Vector3:
+func _decode_payload(payload: PackedByteArray) -> Dictionary:
 	var decoded: Variant = bytes_to_var(payload)
-	if decoded is Vector3:
+	if decoded is Dictionary:
 		return decoded
 
+	return {}
+
+
+func _get_payload_direction(payload: Dictionary) -> Vector3:
+	var direction: Variant = payload.get("direction", Vector3.ZERO)
+	if direction is Vector3:
+		return direction
+
 	return Vector3.ZERO
+
+
+func _get_stream_id() -> PackedByteArray:
+	return String(get_path()).to_utf8_buffer()
 
 
 func _payload_key(payload: PackedByteArray) -> String:
@@ -217,3 +209,14 @@ func _free_charge_vfx(payload: PackedByteArray) -> void:
 	_active_charge_vfx.erase(payload_key)
 	if vfx is Node and is_instance_valid(vfx):
 		(vfx as Node).queue_free()
+
+
+func _free_charge_vfx_for_kind(kind: StringName) -> void:
+	for payload_key_variant: Variant in _active_charge_vfx.keys():
+		var payload_key: String = payload_key_variant
+		var payload: PackedByteArray = PackedByteArray.hex_decode(payload_key)
+		var payload_data: Dictionary = _decode_payload(payload)
+		if payload_data.get("kind") != kind:
+			continue
+
+		_free_charge_vfx(payload)
