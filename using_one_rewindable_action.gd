@@ -199,12 +199,8 @@ func _get_projectile_direction() -> Vector3:
 
 func _get_projectile_transform(direction: Vector3) -> Transform3D:
 	var projectile_transform: Transform3D = actor.muzzle.global_transform
-	var safe_direction: Vector3 = direction
-	if safe_direction.is_zero_approx():
-		safe_direction = -projectile_transform.basis.z.normalized()
-
 	return projectile_transform.looking_at(
-		projectile_transform.origin + safe_direction, actor.global_basis.y
+		projectile_transform.origin + direction, actor.global_basis.y
 	)
 
 
