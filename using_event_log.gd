@@ -1,6 +1,6 @@
 extends Weapon
 
-enum _Stage {
+enum Stage {
 	NONE,
 	LIGHT,
 	HEAVY,
@@ -15,12 +15,6 @@ const _EVENT_LIGHT_PROJECTILE: StringName = &"light_projectile"
 const _EVENT_HEAVY_HOLD: StringName = &"heavy_hold"
 const _EVENT_HEAVY_PROJECTILE: StringName = &"heavy_projectile"
 const _EVENT_RECOVER: StringName = &"recover"
-
-var _attack_stage_started_at: int = -1
-var _attack_stage: int = _Stage.NONE
-
-var _active_projectiles: Dictionary = {}
-var _active_charge_vfx: Dictionary = {}
 
 @export var input: UnitInput
 @export var actor: Actor
@@ -40,7 +34,7 @@ func _ready() -> void:
 
 
 func _get_rollback_states() -> PackedStringArray:
-	return ["_attack_stage_started_at", "_attack_stage"]
+	return []
 
 
 func _rollback_tick(_delta: float, tick: int, _is_fresh: bool) -> void:
@@ -49,46 +43,50 @@ func _rollback_tick(_delta: float, tick: int, _is_fresh: bool) -> void:
 
 	var is_heavy: bool = input.is_action_long_pressed("action_primary")
 	var is_light: bool = not is_heavy and input.is_action_just_pressed("action_primary")
+	var state: Dictionary = _get_current_state(tick)
+	var attack_stage: int = state.get("stage", Stage.NONE)
+	var stage_started_at: int = state.get("started_at", -1)
 
-	if is_light and _attack_stage == _Stage.NONE:
-		_attack_stage_started_at = tick
-		_attack_stage = _Stage.LIGHT
+	if is_light and attack_stage == Stage.NONE:
 		_append_projectile_event(_EVENT_LIGHT_PROJECTILE)
 		return
 
 	if (
-		_attack_stage == _Stage.LIGHT
-		and NetworkTime.seconds_between(_attack_stage_started_at, tick) >= _LIGHT_DURATION
+		attack_stage == Stage.LIGHT
+		and NetworkTime.seconds_between(stage_started_at, tick) >= _LIGHT_DURATION
 	):
-		_attack_stage_started_at = tick
-		_attack_stage = _Stage.RECOVER
 		_append_event(_EVENT_RECOVER)
 		return
 
-	if is_heavy and _attack_stage == _Stage.NONE:
-		_attack_stage_started_at = tick
-		_attack_stage = _Stage.HEAVY
+	if is_heavy and attack_stage == Stage.NONE:
 		_append_event(_EVENT_HEAVY_HOLD)
 		return
 
-	if _attack_stage == _Stage.HEAVY and not is_heavy:
-		var heavy_charge_elapsed: float = NetworkTime.seconds_between(
-			_attack_stage_started_at, tick
-		)
-		_attack_stage_started_at = tick
-		_attack_stage = _Stage.RECOVER
+	if attack_stage == Stage.HEAVY and not is_heavy:
+		var heavy_charge_elapsed: float = NetworkTime.seconds_between(stage_started_at, tick)
 		if heavy_charge_elapsed >= _HEAVY_CHARGE_DURATION:
 			_append_projectile_event(_EVENT_HEAVY_PROJECTILE)
 		else:
 			_append_event(_EVENT_RECOVER)
-		return
 
-	if (
-		_attack_stage == _Stage.RECOVER
-		and NetworkTime.seconds_between(_attack_stage_started_at, tick) >= _RECOVER_DURATION
-	):
-		_attack_stage_started_at = -1
-		_attack_stage = _Stage.NONE
+
+func _get_current_state(tick: int) -> Dictionary:
+	var events: Array[RollbackEvent] = _event_stream.get_events()
+	for i: int in range(events.size() - 1, -1, -1):
+		var event: RollbackEvent = events[i]
+		var payload: Dictionary = _decode_payload(event.payload)
+		var kind: Variant = payload.get("kind")
+		if kind == _EVENT_LIGHT_PROJECTILE:
+			return {"stage": Stage.LIGHT, "started_at": event.tick}
+		if kind == _EVENT_HEAVY_HOLD:
+			return {"stage": Stage.HEAVY, "started_at": event.tick}
+		if kind == _EVENT_HEAVY_PROJECTILE or kind == _EVENT_RECOVER:
+			if NetworkTime.seconds_between(event.tick, tick) < _RECOVER_DURATION:
+				return {"stage": Stage.RECOVER, "started_at": event.tick}
+
+			return {"stage": Stage.NONE, "started_at": -1}
+
+	return {"stage": Stage.NONE, "started_at": -1}
 
 
 func _append_projectile_event(kind: StringName) -> void:
@@ -114,19 +112,17 @@ func _on_event_applied(event: RollbackEvent) -> void:
 	if kind == _EVENT_LIGHT_PROJECTILE:
 		actor.play_animation(&"attack")
 		var light_direction: Vector3 = _get_payload_direction(payload)
-		var light_projectile_node: Node = _spawn_projectile(light_projectile, light_direction)
-		_active_projectiles[_payload_key(event.payload)] = light_projectile_node
+		event.local_context = _spawn_projectile(light_projectile, light_direction)
 	elif kind == _EVENT_HEAVY_HOLD:
 		actor.play_animation(&"attack_hold")
-		_active_charge_vfx[_payload_key(event.payload)] = _spawn_charge_vfx()
+		event.local_context = _spawn_charge_vfx()
 	elif kind == _EVENT_HEAVY_PROJECTILE:
-		_free_charge_vfx_for_kind(_EVENT_HEAVY_HOLD)
+		_revert_latest_event_of_kind(_EVENT_HEAVY_HOLD)
 		actor.play_animation(&"attack_release")
 		var heavy_direction: Vector3 = _get_payload_direction(payload)
-		var heavy_projectile_node: Node = _spawn_projectile(heavy_projectile, heavy_direction)
-		_active_projectiles[_payload_key(event.payload)] = heavy_projectile_node
+		event.local_context = _spawn_projectile(heavy_projectile, heavy_direction)
 	elif kind == _EVENT_RECOVER:
-		_free_charge_vfx_for_kind(_EVENT_HEAVY_HOLD)
+		_revert_latest_event_of_kind(_EVENT_HEAVY_HOLD)
 		actor.play_animation(&"idle")
 
 
@@ -135,9 +131,9 @@ func _on_event_reverted(event: RollbackEvent) -> void:
 	var payload: Dictionary = _decode_payload(event.payload)
 	var kind: Variant = payload.get("kind")
 	if kind == _EVENT_LIGHT_PROJECTILE or kind == _EVENT_HEAVY_PROJECTILE:
-		_free_projectile(event.payload)
+		_revert_local_context(event)
 	elif kind == _EVENT_HEAVY_HOLD:
-		_free_charge_vfx(event.payload)
+		_revert_local_context(event)
 
 
 func _spawn_projectile(projectile_scene: PackedScene, direction: Vector3) -> Node:
@@ -185,38 +181,23 @@ func _get_stream_id() -> PackedByteArray:
 	return String(get_path()).to_utf8_buffer()
 
 
-func _payload_key(payload: PackedByteArray) -> String:
-	return payload.hex_encode()
-
-
-func _free_projectile(payload: PackedByteArray) -> void:
-	var payload_key: String = _payload_key(payload)
-	if not _active_projectiles.has(payload_key):
-		return
-
-	var projectile: Variant = _active_projectiles[payload_key]
-	_active_projectiles.erase(payload_key)
-	if projectile is Node and is_instance_valid(projectile):
-		(projectile as Node).queue_free()
-
-
-func _free_charge_vfx(payload: PackedByteArray) -> void:
-	var payload_key: String = _payload_key(payload)
-	if not _active_charge_vfx.has(payload_key):
-		return
-
-	var vfx: Variant = _active_charge_vfx[payload_key]
-	_active_charge_vfx.erase(payload_key)
-	if vfx is Node and is_instance_valid(vfx):
-		(vfx as Node).queue_free()
-
-
-func _free_charge_vfx_for_kind(kind: StringName) -> void:
-	for payload_key_variant: Variant in _active_charge_vfx.keys():
-		var payload_key: String = payload_key_variant
-		var payload: PackedByteArray = PackedByteArray.hex_decode(payload_key)
-		var payload_data: Dictionary = _decode_payload(payload)
-		if payload_data.get("kind") != kind:
+func _revert_latest_event_of_kind(kind: StringName) -> void:
+	var events: Array[RollbackEvent] = _event_stream.get_events()
+	for i: int in range(events.size() - 1, -1, -1):
+		var event: RollbackEvent = events[i]
+		var payload: Dictionary = _decode_payload(event.payload)
+		if payload.get("kind") != kind:
 			continue
 
-		_free_charge_vfx(payload)
+		_revert_local_context(event)
+		return
+
+
+func _revert_local_context(event: RollbackEvent) -> void:
+	if not (event.local_context is Node):
+		return
+
+	var node: Node = event.local_context
+	event.local_context = null
+	if is_instance_valid(node):
+		node.queue_free()
