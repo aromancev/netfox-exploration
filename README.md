@@ -27,7 +27,7 @@ More straightforward than one RA but paying with additional network traffic **fo
 ### `using_effects.gd`
 Uses `RollbackEffects` to record and deduplicate local presentation effects.
 
-**Idea:** gameplay state drives the weapon, and effects are recorded separately so resimulation can keep or revert them.
+**Idea:** gameplay state drives the weapon, and effects are recorded separately so resimulation can keep or revert them. This is conceptually the same as https://react.dev/reference/react/useEffect.
 
 Straightforward apply and revert of events. Zero network cost. Low complexity. Effect deduplication keys are not immediately obvious. Possibly some synchronization edge case I'm not seeing?
 
