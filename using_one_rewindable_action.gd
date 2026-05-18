@@ -20,6 +20,7 @@ var _attack_stage_started_at: int = -1
 var _attack_stage: int = _Stage.NONE
 var _heavy_projectile_spawned: bool = false
 
+# This is necessary because we're only using one RA. I don't think this is how it should be.
 var _last_confirmed_event: StringName
 var _last_cancelled_event: StringName
 
